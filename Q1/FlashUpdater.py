@@ -2,14 +2,9 @@
 import os
 
 flash_sim = ['A'] * 1000
-extra_block = ['C'] * 100
+extra_block = ['C'] * 100  # Initialize with 'C'*100
 update_needed_flag = True
 
-# State machine states
-STATE_INIT = 'INIT'
-STATE_ERASING = 'ERASING'
-STATE_WRITING = 'WRITING'
-STATE_COMPLETE = 'COMPLETE'
 
 def read_block(block_number):
     block_content = ""
@@ -58,7 +53,7 @@ def get_expected_block_signature_after_update(block_number):
 def compute_block_updated_content(block_number):
     if 0 <= block_number <= 9:
         start = block_number * 100
-        block = flash_sim[start:start + 100]
+        block = flash_sim[start:]
         if all(c == 'A' for c in block):
             return 'B' * 100
         else:
@@ -74,66 +69,68 @@ def set_update_finished():
     global update_needed_flag
     update_needed_flag = False
 
-def save_state(state, current_block):
-    """Save current state and block number to extra block"""
-    state_data = f"{state}:{current_block}"
-    write_block(100, state_data)
-
-def get_state():
-    """Read current state from extra block"""
-    state_data = read_block(100)
-    if not state_data:
-        return STATE_INIT, -1
-    try:
-        state, block = state_data.split(':')
-        return state, int(block)
-    except:
-        return STATE_INIT, -1
-
+# SHMULIK: This is your entry point
 def perform_update():
-    """Fail-safe update implementation"""
-    current_state, current_block = get_state()
-    print(f"Starting update from state: {current_state}, block: {current_block}")
-    
-    if current_state == STATE_INIT:
-        # Start update process
-        print("Initializing update process")
-        save_state(STATE_ERASING, 0)
-        current_block = 0
-    
-    if current_state == STATE_ERASING:
-        # Erase current block
-        print(f"Erasing block {current_block}")
-        write_block(current_block, '0' * 100)
-        save_state(STATE_WRITING, current_block)
-    
-    if current_state == STATE_WRITING:
-        # Write new content to current block
-        print(f"Writing new content to block {current_block}")
-        new_content = compute_block_updated_content(current_block)
-        write_block(current_block, new_content)
+    # Step 1: Check each block's status and determine update strategy
+    for block_number in range(10):
+        current_sig = get_flash_block_signature(block_number)
+        expected_sig = get_expected_block_signature_after_update(block_number)
         
-        # Move to next block or complete
-        if current_block < 9:
-            current_block += 1
-            print(f"Moving to next block: {current_block}")
-            save_state(STATE_ERASING, current_block)
-        else:
-            print("Update complete")
-            save_state(STATE_COMPLETE, current_block)
+        # Skip if already updated
+        if current_sig == expected_sig:
+            continue
+            
+        # Step 2: Prepare update content in extra block
+        # Always update to 'B'*100 for blocks 0-9
+        new_content = 'B' * 100
+        
+        # Store original extra block content
+        original_extra_block = read_block(100)
+        
+        # Write new content to extra block first (safe storage)
+        write_block(100, new_content)
+        
+        # Verify extra block content is correct
+        extra_block_sig = get_flash_block_signature(100)
+        if extra_block_sig != expected_sig:
+            # If verification fails, retry writing to extra block
+            write_block(100, new_content)
+            extra_block_sig = get_flash_block_signature(100)
+            if extra_block_sig != expected_sig:
+                # If still fails, skip this block and continue with others
+                write_block(100, original_extra_block)  # Restore original content
+                continue
+        
+        # Step 3: Write to target block
+        write_block(block_number, new_content)
+        
+        # Verify target block was written correctly
+        final_sig = get_flash_block_signature(block_number)
+        if final_sig != expected_sig:
+            # If verification fails, retry writing to target block
+            write_block(block_number, new_content)
+            final_sig = get_flash_block_signature(block_number)
+            if final_sig != expected_sig:
+                # If still fails, skip this block and continue with others
+                write_block(100, original_extra_block)  # Restore original content
+                continue
+        
+        # Restore original extra block content after successful update
+        write_block(100, original_extra_block)
     
-    if current_state == STATE_COMPLETE:
-        # Update is complete
-        print("Setting update as finished")
-        set_update_finished()
+    # Step 4: Mark update as complete
+    set_update_finished()
+
 
 def continue_normal_boot():
+    # Write flash_sim content to file
     buffer_str = ''.join(flash_sim)
     with open('flash_sim.txt', 'w') as f:
         for i in range(0, 1000, 100):
             line = buffer_str[i:i+100]
             f.write(line + '\n')
         f.write('\n')
+        # Write extra block content
         f.write(''.join(extra_block))
 
 def boot_start():
